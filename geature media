@@ -1,0 +1,96 @@
+import cv2
+import mediapipe as mp
+import pyautogui
+import serial
+import time
+import math
+
+# 1. Initialize Hardware Feedback Bridge
+try:
+    ser = serial.Serial('COM11', 115200, timeout=1) 
+    time.sleep(2)
+    hardware_connected = True
+    print("Hardware feedback system connected.")
+except serial.SerialException:
+    hardware_connected = False
+    print("WARNING: Hardware not found. Running OS Automation only.")
+
+# 2. Initialize MediaPipe and Webcam
+print("Waking up AI Vision...")
+mp_hands = mp.solutions.hands
+hands = mp_hands.Hands(min_detection_confidence=0.7, min_tracking_confidence=0.7)
+mp_draw = mp.solutions.drawing_utils
+
+cap = cv2.VideoCapture(0, cv2.CAP_DSHOW)
+
+if not cap.isOpened():
+    print("\nCRITICAL ERROR: Camera blocked. Check Windows Privacy Settings.")
+    exit()
+
+cooldown_time = 0
+
+print("------------------------------------------------")
+print("MEDIA AUTOMATION ACTIVE")
+print("Gestures:")
+print("* Open Hand Wide: Volume Up")
+print("* Pinch Thumb and Index: Volume Down")
+print("* Pinch Thumb and Pinky: Play / Pause")
+print("Press 'q' in the video window to quit.")
+print("------------------------------------------------")
+
+while True:
+    ret, frame = cap.read()
+    if not ret:
+        break
+
+    # Flip frame for a mirror effect
+    frame = cv2.flip(frame, 1)
+    rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+    results = hands.process(rgb_frame)
+
+    if results.multi_hand_landmarks:
+        for hand_landmarks in results.multi_hand_landmarks:
+            mp_draw.draw_landmarks(frame, hand_landmarks, mp_hands.HAND_CONNECTIONS)
+
+            h, w, _ = frame.shape
+            
+            # Extract coordinates for Thumb(4), Index(8), and Pinky(20)
+            thumb_x, thumb_y = int(hand_landmarks.landmark[4].x * w), int(hand_landmarks.landmark[4].y * h)
+            index_x, index_y = int(hand_landmarks.landmark[8].x * w), int(hand_landmarks.landmark[8].y * h)
+            pinky_x, pinky_y = int(hand_landmarks.landmark[20].x * w), int(hand_landmarks.landmark[20].y * h)
+
+            # Calculate physical distance between the fingertips
+            dist_index = math.hypot(index_x - thumb_x, index_y - thumb_y)
+            dist_pinky = math.hypot(pinky_x - thumb_x, pinky_y - thumb_y)
+
+            # ACTION 1: Play / Pause (Thumb to Pinky pinch)
+            # The 2-second cooldown prevents the AI from spamming the pause button rapidly
+            if dist_pinky < 40 and time.time() - cooldown_time > 2:
+                pyautogui.press('playpause')
+                cv2.putText(frame, "PLAY / PAUSE", (50, 100), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 3)
+                if hardware_connected:
+                    ser.write(b'1')
+                cooldown_time = time.time()
+
+            # ACTION 2: Volume Control (Thumb to Index distance)
+            if dist_index > 150:
+                pyautogui.press('volumeup')
+                cv2.putText(frame, "VOLUME UP", (50, 50), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 3)
+                if hardware_connected:
+                    ser.write(b'1')
+            elif dist_index < 40:
+                pyautogui.press('volumedown')
+                cv2.putText(frame, "VOLUME DOWN", (50, 50), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 0, 0), 3)
+                if hardware_connected:
+                    ser.write(b'1')
+
+    cv2.imshow("OS Automation Dashboard", frame)
+
+    if cv2.waitKey(1) & 0xFF == ord('q'):
+        break
+
+if hardware_connected:
+    ser.close()
+cap.release()
+cv2.destroyAllWindows()
+print("System Offline.")
